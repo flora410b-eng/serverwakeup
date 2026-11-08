@@ -1,0 +1,108 @@
+name: Wake Render Sites (Smart Start/Stop)
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'   # هر ۳۰ دقیقه (UTC)
+  workflow_dispatch: {}
+
+concurrency:
+  group: wake-render
+  cancel-in-progress: true
+
+jobs:
+  wake:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Restore state cache
+        uses: actions/cache@v3
+        with:
+          path: .cache/
+          key: site-state-${{ runner.os }}-v4
+          restore-keys: |
+            site-state-${{ runner.os }}-v4
+
+      - name: Wake Render Sites with Smart Timing
+        run: |
+          set -e
+          mkdir -p .cache
+          state_file=".cache/site_status.log"
+          touch "$state_file"
+
+          # 🕒 محاسبه ساعت ایران (UTC+3:30)
+          current_utc_hour=$(date -u +"%H")
+          current_utc_minute=$(date -u +"%M")
+          total_utc_minutes=$((10#$current_utc_hour * 60 + 10#$current_utc_minute))
+          total_iran_minutes=$(( (total_utc_minutes + 210) % 1440 ))
+
+          iran_hour=$((total_iran_minutes / 60))
+          iran_minute=$((total_iran_minutes % 60))
+          printf "🕒 Iran time: %02d:%02d\n" $iran_hour $iran_minute
+
+          # 🌐 لیست سایت‌ها
+          sites=(
+            "https://n8nyoutube-ullx.onrender.com/"
+            "https://n8nrunner.onrender.com/"
+            "https://kadoo.click/"
+            "https://crawl-96xx.onrender.com"
+            "https://server2-sy6g.onrender.com/health"
+            "https://neurobackend.onrender.com/"
+            "https://license-krks.onrender.com/"
+            "https://api1-nsqh.onrender.com/"
+            "https://indexkadoo.onrender.com/health"
+   
+          )
+
+          # 💤 بازه استراحت: 05:00–09:30 ایران
+          start_minutes=$((9 * 60 + 30))
+          stop_minutes=$((5 * 60))
+
+          if [ $total_iran_minutes -ge $stop_minutes ] && [ $total_iran_minutes -lt $start_minutes ]; then
+            echo "😴 Sleep mode (05:00–09:30 Iran). Skipping all checks."
+            exit 0
+          fi
+
+          echo "🟢 Active hours. Checking & waking sites..."
+
+          MAX_ATTEMPTS=15
+
+          for site in "${sites[@]}"; do
+            echo "🔹 Checking $site"
+            success=false
+
+            for i in $(seq 1 $MAX_ATTEMPTS); do
+              echo "   attempt $i/$MAX_ATTEMPTS"
+
+              status_code=$(curl -s -o /dev/null \
+                --connect-timeout 5 \
+                --max-time 8 \
+                -w "%{http_code}" "$site" || echo "000")
+
+              body_preview=$(curl -s \
+                --connect-timeout 5 \
+                --max-time 8 \
+                "$site" 2>/dev/null | head -n 3 || true)
+
+              if [[ "$status_code" =~ ^(200|301|302)$ ]] \
+                 && [[ ! "$body_preview" =~ "Render Internal Error" ]] \
+                 && [[ ! "$body_preview" =~ "starting" ]] \
+                 && [[ ! "$body_preview" =~ "Booting" ]]; then
+                success=true
+                break
+              fi
+
+              sleep 10
+            done
+
+            if [ "$success" = true ]; then
+              echo "$site → ✅ UP"
+            else
+              echo "$site → ❌ DOWN (wake attempts failed)"
+            fi
+          done
+
+      - name: Save cache
+        uses: actions/cache@v3
+        with:
+          path: .cache/
+          key: site-state-${{ runner.os }}-v4
