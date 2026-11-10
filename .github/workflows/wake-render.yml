@@ -3,9 +3,7 @@ name: Wake Render Sites (Smart Start/Stop + NeuroX Worker Scheduler)
 
 on:
   schedule:
-    # Every 30 minutes, offset from the top of the hour.
-    - cron: '7,37 * * * *'
-
+    - cron: '13,43 * * * *'
   workflow_dispatch:
     inputs:
       dispatch_article_worker:
