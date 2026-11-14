@@ -1,5 +1,6 @@
 name: NeuroX Article Review Worker Scheduler
 
+on:
   workflow_dispatch:
 
 permissions:
@@ -110,5 +111,5 @@ jobs:
 
           echo ""
           echo "SUCCESS: GitHub accepted the Worker dispatch."
-          echo "Worker execution is independent of this scheduler."
+          echo "Worker execution is independent of this dispatcher."
           echo "=================================================="
