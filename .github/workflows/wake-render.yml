@@ -1,9 +1,5 @@
 name: NeuroX Article Review Worker Scheduler
 
-on:
-  schedule:
-    - cron: '13,43 * * * *'
-
   workflow_dispatch:
 
 permissions:
