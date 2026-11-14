@@ -1,37 +1,17 @@
-
-name: Wake Render Sites (Smart Start/Stop + NeuroX Worker Scheduler)
+name: NeuroX Article Review Worker Scheduler
 
 on:
   schedule:
     - cron: '13,43 * * * *'
+
   workflow_dispatch:
-    inputs:
-      dispatch_article_worker:
-        description: 'Also trigger one production Article Review Worker run'
-        required: false
-        type: boolean
-        default: false
 
 permissions:
   contents: read
 
 jobs:
-
-  # ============================================================
-  # JOB 1: DISPATCH NEUROX ARTICLE REVIEW WORKER
-  # ============================================================
-
   dispatch-article-worker:
     name: Dispatch NeuroX Article Review Worker
-
-    if: >-
-      ${{
-        github.event_name == 'schedule' ||
-        (
-          github.event_name == 'workflow_dispatch' &&
-          inputs.dispatch_article_worker == true
-        )
-      }}
 
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -39,6 +19,7 @@ jobs:
     steps:
       - name: Trigger NeuroX Article Review Worker
         shell: bash
+
         env:
           GH_TOKEN: ${{ secrets.NEUROX_WORKER_DISPATCH_TOKEN }}
 
@@ -106,7 +87,7 @@ jobs:
 
           echo "HTTP response: $HTTP_CODE"
 
-          if [[ "$HTTP_CODE" != "200" ]]; then
+          if [[ "$HTTP_CODE" != "200" && "$HTTP_CODE" != "204" ]]; then
             echo "ERROR: Worker dispatch was not accepted."
 
             if [[ -s "$RESPONSE_FILE" ]]; then
@@ -116,170 +97,22 @@ jobs:
             exit 1
           fi
 
-          RUN_ID="$(jq -r '.workflow_run_id // empty' "$RESPONSE_FILE")"
-          RUN_URL="$(jq -r '.html_url // empty' "$RESPONSE_FILE")"
+          if [[ "$HTTP_CODE" == "200" && -s "$RESPONSE_FILE" ]]; then
 
-          if [[ -n "$RUN_ID" ]]; then
-            echo "Worker workflow run ID: $RUN_ID"
-          fi
+            RUN_ID="$(jq -r '.workflow_run_id // empty' "$RESPONSE_FILE" 2>/dev/null || true)"
+            RUN_URL="$(jq -r '.html_url // .run_url // empty' "$RESPONSE_FILE" 2>/dev/null || true)"
 
-          if [[ -n "$RUN_URL" ]]; then
-            echo "Worker run URL: $RUN_URL"
+            if [[ -n "$RUN_ID" ]]; then
+              echo "Worker workflow run ID: $RUN_ID"
+            fi
+
+            if [[ -n "$RUN_URL" ]]; then
+              echo "Worker run URL: $RUN_URL"
+            fi
+
           fi
 
           echo ""
           echo "SUCCESS: GitHub accepted the Worker dispatch."
-          echo "The Worker is running independently in its target repository."
-
+          echo "Worker execution is independent of this scheduler."
           echo "=================================================="
-
-
-  # ============================================================
-  # JOB 2: WAKE AND CHECK RENDER SITES
-  # ============================================================
-
-  wake:
-    name: Wake Render Sites
-
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-
-    concurrency:
-      group: wake-render-sites
-      cancel-in-progress: true
-
-    steps:
-
-      # --------------------------------------------------------
-      # RESTORE CACHE
-      # --------------------------------------------------------
-
-      - name: Restore state cache
-        uses: actions/cache@v3
-        with:
-          path: .cache/
-          key: site-state-${{ runner.os }}-v4
-          restore-keys: |
-            site-state-${{ runner.os }}-v4
-
-
-      # --------------------------------------------------------
-      # WAKE RENDER SITES
-      # --------------------------------------------------------
-
-      - name: Wake Render Sites with Smart Timing
-        shell: bash
-
-        run: |
-          set -euo pipefail
-
-          mkdir -p .cache
-
-          state_file=".cache/site_status.log"
-          touch "$state_file"
-
-          # Iran time: UTC+3:30
-          current_utc_hour=$(date -u +"%H")
-          current_utc_minute=$(date -u +"%M")
-
-          total_utc_minutes=$((10#$current_utc_hour * 60 + 10#$current_utc_minute))
-          total_iran_minutes=$(((total_utc_minutes + 210) % 1440))
-
-          iran_hour=$((total_iran_minutes / 60))
-          iran_minute=$((total_iran_minutes % 60))
-
-          printf "Iran time: %02d:%02d\n" "$iran_hour" "$iran_minute"
-
-          # Render site list
-          sites=(
-            "https://n8nyoutube-ullx.onrender.com/"
-            "https://n8nrunner.onrender.com/"
-            "https://kadoo.click/"
-            "https://crawl-96xx.onrender.com"
-            "https://server2-sy6g.onrender.com/health"
-            "https://neurobackend.onrender.com/"
-            "https://license-krks.onrender.com/"
-            "https://api1-nsqh.onrender.com/"
-            "https://indexkadoo.onrender.com/health"
-          )
-
-          # Sleep window: 05:00–09:30 Iran
-          start_minutes=$((9 * 60 + 30))
-          stop_minutes=$((5 * 60))
-
-          if [[ "$total_iran_minutes" -ge "$stop_minutes" ]] &&
-             [[ "$total_iran_minutes" -lt "$start_minutes" ]]; then
-
-            echo "Sleep mode (05:00–09:30 Iran)."
-            echo "Skipping Render site checks."
-            echo "NeuroX Worker dispatch is handled by a separate job."
-
-          else
-
-            echo "Active hours. Checking and waking Render sites..."
-
-            MAX_ATTEMPTS=15
-
-            response_file="$(mktemp)"
-            trap 'rm -f "$response_file"' EXIT
-
-            for site in "${sites[@]}"; do
-
-              echo ""
-              echo "Checking: $site"
-
-              success=false
-
-              for i in $(seq 1 "$MAX_ATTEMPTS"); do
-
-                echo "Attempt $i/$MAX_ATTEMPTS"
-
-                status_code=$(curl \
-                  --silent \
-                  --show-error \
-                  --output "$response_file" \
-                  --connect-timeout 5 \
-                  --max-time 8 \
-                  --write-out "%{http_code}" \
-                  "$site" 2>/dev/null) || status_code="000"
-
-                body_preview=$(head -n 3 "$response_file" 2>/dev/null || true)
-
-                body_preview_lower=$(printf '%s' "$body_preview" | tr '[:upper:]' '[:lower:]')
-
-                if [[ "$status_code" =~ ^(200|301|302)$ ]] &&
-                   [[ "$body_preview_lower" != *"render internal error"* ]] &&
-                   [[ "$body_preview_lower" != *"starting"* ]] &&
-                   [[ "$body_preview_lower" != *"booting"* ]]; then
-
-                  success=true
-                  break
-
-                fi
-
-                if [[ "$i" -lt "$MAX_ATTEMPTS" ]]; then
-                  sleep 10
-                fi
-
-              done
-
-              if [[ "$success" == true ]]; then
-                echo "$site -> UP"
-              else
-                echo "$site -> DOWN (wake attempts failed)"
-              fi
-
-            done
-
-          fi
-
-
-      # --------------------------------------------------------
-      # SAVE CACHE
-      # --------------------------------------------------------
-
-      - name: Save cache
-        uses: actions/cache@v3
-        with:
-          path: .cache/
-          key: site-state-${{ runner.os }}-v4
