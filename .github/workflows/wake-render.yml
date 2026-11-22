@@ -1,8 +1,6 @@
 name: Wake Render Sites (Smart Start/Stop)
 
 on:
-  schedule:
-    - cron: '*/30 * * * *'   # هر ۳۰ دقیقه (UTC)
   workflow_dispatch: {}
 
 concurrency:
